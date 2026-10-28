@@ -1,0 +1,41 @@
+{
+  "name": "patreoncli",
+  "version": "0.1.0",
+  "description": "End-user patreon.com CLI and TypeScript API using your browser session",
+  "license": "MIT",
+  "type": "module",
+  "module": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./browser": "./src/browser.ts",
+    "./web-actions": "./src/web-actions.ts",
+    "./community": "./src/community.ts"
+  },
+  "bin": {
+    "patreoncli": "./patreoncli.ts"
+  },
+  "files": [
+    "src",
+    "patreoncli.ts",
+    "README.md",
+    "LICENSE",
+    "docs"
+  ],
+  "engines": {
+    "bun": ">=1.1"
+  },
+  "scripts": {
+    "patreoncli": "bun run patreoncli.ts",
+    "agent": "bun run patreoncli.ts --compact",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "playwright-core": "^1.64.1",
+    "stream-chat": "^9.54.3"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  }
+}
