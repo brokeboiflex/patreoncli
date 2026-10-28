@@ -320,10 +320,15 @@ export async function autoModeration(b:Browser,enabled:boolean):Promise<unknown>
   const toggle=await one(b.page.getByRole("switch",{ name:/^(Toggle comment auto-moderation|Przełącz automatyczną moderację komentarzy)$/i }),"comment auto-moderation toggle");
   if(await toggle.isChecked()===enabled)return {status:"unchanged",enabled};
   const pending=b.page.waitForResponse(r=>r.request().method()==="PATCH"&&/^\/api\/(campaigns\/\d+|user-automod-filter-settings(?:\/[^/]+)?)$/.test(new URL(r.url()).pathname)).catch(()=>null);
-  await toggle.setChecked(enabled);
+  // Patreon changes aria-checked only after its asynchronous save.
+  // setChecked asserts immediately after clicking and can reject a successful write.
+  await toggle.click();
   const response=await pending;
   if(!response)throw new WriteUncertain("No response confirming the auto-moderation update.");
   if(!response.ok())throw new ClientError("Patreon rejected the auto-moderation update.","WRITE_REJECTED");
+  const receipt=await response.json().catch(()=>null);
+  if(!receipt)throw new WriteUncertain("The auto-moderation response did not confirm a save.");
+  if(receipt.errors?.length)throw new ClientError("Patreon rejected the auto-moderation update.","WRITE_REJECTED");
   await b.page.reload({ waitUntil:"domcontentloaded" });
   await b.guard();
   const saved=await one(b.page.getByRole("switch",{ name:/^(Toggle comment auto-moderation|Przełącz automatyczną moderację komentarzy)$/i }),"saved auto-moderation toggle");

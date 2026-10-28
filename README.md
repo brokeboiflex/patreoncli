@@ -58,7 +58,7 @@ bun patreoncli.ts moderation --tab reported-content --cookies brave
 
 Post options: `--title`, text/`--body-file`, `--audience free|paid`, `--comments everyone|members|paid|none`, `--notify on|off`. Bodies are plain text entered into the rich-text editor. Existing formatting is replaced when the body is replaced. `attach` supports one image, audio, video, or attachment file on a draft; the command waits until file transfer is complete, though media processing can continue afterward. `schedule` requires a future ISO time with an offset and minute precision, translates it to the browser's timezone, and verifies the saved instant.
 
-Comments support listing, new comments/replies, editing, and deletion where the account has permission. `moderation` reads the reports, moderators, or automatic-moderation tab. `auto-moderation on|off` changes the comment filter. `chats` inspects the inbox. `moderators`, `add-moderator USER_ID`, `remove-moderator ASSIGNMENT_ID`, `blocks`, `block USER_ID`, `unblock BLOCK_ID`, `reports`, and `resolve-report REPORT_ID keep|remove` provide community administration. Adding a moderator sends an invitation. Blocking does not also delete their comments. Report resolution verifies the persisted status.
+Comments support listing, new comments/replies, editing, and deletion where the account has permission. `moderation` reads the reports, moderators, or automatic-moderation tab. `auto-moderation on|off` changes the comment filter, waits for the asynchronous save, and reloads the page to verify persistence. `chats` inspects the inbox. `moderators`, `add-moderator USER_ID`, `remove-moderator ASSIGNMENT_ID`, `blocks`, `block USER_ID`, `unblock BLOCK_ID`, `reports`, and `resolve-report REPORT_ID keep|remove` provide community administration. Adding a moderator sends an invitation. Blocking does not also delete their comments. Report resolution verifies the persisted status.
 
 Chat commands use the same Stream Chat service as Patreon's website, through its official JavaScript SDK. Tokens are obtained from your signed-in Patreon session, used in memory, and never printed or saved. `chat-list` returns your chat identity and channel `cid` values. Creator identities have the form `campaign-CAMPAIGN_ID`; use that campaign ID for chat creation and DMs.
 
@@ -153,6 +153,10 @@ console.log(await community.chatList(browser, "creator"));
 ```sh
 bun run typecheck
 bun test
+# Include the offline asynchronous-switch regression in your installed Chromium:
+PATREONCLI_BROWSER=/path/to/browser bun test
 ```
+
+Without `PATREONCLI_BROWSER`, the one browser regression is skipped. It uses local fixtures, loads no account cookies, and blocks external requests.
 
 The argument parser and browser-cookie reader were adapted from MIT-licensed [brokeboiflex/fbcli](https://github.com/brokeboiflex/fbcli); its copyright notice is retained in LICENSE. Website adapters are separate code based on the referenced services' current UI/source. No account cookies, private page snapshots, or access tokens are included in either package.
