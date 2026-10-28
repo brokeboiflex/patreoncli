@@ -2,7 +2,7 @@
 
 A Bun CLI and importable TypeScript API following [fbcli](https://github.com/brokeboiflex/fbcli)'s flat commands, browser-session authentication, JSON output, offline `describe`, and `--dry-run` conventions.
 
-**Development version.** Authenticated reads, draft creation/editing/deletion, draft settings, and a file attachment have live verification. Moderator/block/report management and chat/DM commands are implemented against inspected website contracts. Their writes still need live verification on a launched creator account with members. See [tested workflows and remaining work](docs/coverage.md).
+**Development version.** Authenticated reads, draft creation/editing/deletion, file attachment, tier audiences, polls, rich text, link embeds, and collection lifecycle have live verification. Moderator/block/report management and chat/DM commands are implemented against inspected website contracts. Their writes still need live verification on a launched creator account with members. See [tested workflows and remaining work](docs/coverage.md).
 
 ## Run
 
@@ -79,18 +79,62 @@ bun patreoncli.ts react community_chat_lounge:CHANNEL_ID MESSAGE_ID emoji-1f44d 
 bun patreoncli.ts dm CAMPAIGN_ID USER_ID "Thanks for your support!" --yes
 ```
 
-Other commands: `delete-chat`, `delete-message`, `unpin-message`, `mute-user`, `unmute-user`, and `react --remove`. Chat/message commands accept `--as creator|member`; creator is the default. Chat lists return up to 30 channels; message/reply/member pages up to 100 items. Use `chat-messages --before MESSAGE_ID`, `chat-replies --before REPLY_ID`, and `chat-members --offset N` for older pages. Commands cannot grant membership or exceed the account's permissions.
+Files and images can be sent with `send-attachment CID ./file.txt "Optional message" --yes`. Use `--type image` for an image, `--mime TYPE` to override detection, and `--reply-to MESSAGE_ID` for a thread. The upload finishes before the message is sent. If delivery becomes uncertain after upload, inspect the channel before retrying; the uploaded file may remain on the service.
+
+Other commands: `delete-chat`, `delete-message`, `unpin-message`, `mute-user`, `unmute-user`, and `react --remove`. Chat/message commands accept `--as creator|member`; creator is the default. Chat lists follow pages up to `--limit` (1–500); `chat-list --all` traverses every available channel and `--offset N` resumes from `nextOffset`. Message/reply/member pages contain up to 100 items. Use `chat-messages --before MESSAGE_ID`, `chat-replies --before REPLY_ID`, and `chat-members --offset N` for older pages. Commands cannot grant membership or exceed the account's permissions.
 
 New chats default to unpublished. Chat audiences are `all_members`, `paid_members`, or `selected_tiers --tiers ID,ID`; `--emoji` sets the channel emoji. Creator chat creation requires access enabled by Patreon; an unpublished creator account can receive HTTP 403. `dm` sends to exactly one explicit user, without a bulk-recipient fallback. Legacy DM conversation deletion is not exposed by Patreon. Editing/deleting individual messages uses channel permissions.
 
-Post/member/comment lists return the website's JSON:API `items`, related `included` resources, and pagination metadata. `--limit` caps returned items (1–500). `truncated: true` means the last server page exceeded the requested limit; `next` points after that server page, so it is not a lossless resume cursor when truncated. Empty account lists have been checked; populated members and multi-page communities still need live verification.
+Post/member/comment lists, `collections`, `moderators`, `blocks`, and `reports` return `items`, related `included` resources, and an opaque `cursor` (`next` is an alias). `--limit` caps returned items (1–500). `--cursor TOKEN` resumes within an oversized server page without dropping unused rows; `--all` ignores the limit and follows all pages. `truncated: true` means a continuation is available. Both JSON:API next links and Patreon's `meta.pagination.cursors.next` are supported. Use a cursor with the same list and filters. Lists are live and can change between calls. The original `community.moderators/blocks/reports(browser)` API still returns the raw document; pass `{limit, cursor, all}` to obtain the paginated result.
 
-English and Polish UI labels are supported where inspected. Other locales may fail with `UI_CHANGED`. These are unofficial website adapters, not an extension of Patreon's public OAuth API. Community requests use the actual same-origin JSON:API routes and page CSRF signature; posting still uses the editor UI. They only access content available to the signed-in account.
+## Audiences, rich content, polls and collections
+
+These commands update the existing post through the website's same-origin JSON:API and verify the saved fields. They preserve unrelated relationships, do not publish drafts, and request no member notification. Use `publish` separately when ready.
+
+```sh
+bun patreoncli.ts tiers CAMPAIGN_ID
+bun patreoncli.ts set-audience POST_ID CAMPAIGN_ID tiers --tiers TIER_ID,TIER_ID --yes
+bun patreoncli.ts set-audience POST_ID CAMPAIGN_ID paid --yes
+bun patreoncli.ts set-audience POST_ID CAMPAIGN_ID free --yes
+bun patreoncli.ts post-details POST_ID
+bun patreoncli.ts edit-rich POST_ID document.json --yes
+bun patreoncli.ts edit-embed POST_ID https://example.com/article --type link --yes
+bun patreoncli.ts edit-poll POST_ID poll.json --yes
+```
+
+`tiers` returns rewards and their access rules. `set-audience` resolves actual access-rule IDs from that campaign and verifies the post belongs to it. `edit-embed` also accepts `image_embed`, `video_embed`, and `audio_embed` for providers Patreon supports; the service must resolve the URL. Changing an embed's post type can replace an existing poll, as in the site's editor. Only link embedding has live verification.
+
+`edit-rich` replaces the body with a Remirror JSON document. Supported nodes: `doc`, `paragraph`, `text`, `heading` (`attrs.level` 1–6), `bulletList`, `orderedList` (`attrs.order`), `listItem`, `blockquote`, and `hardBreak`. Text marks: `bold`, `italic`, `underline`, `strike`, `code`, and `link` with `attrs.href` (HTTP, HTTPS, or mailto). Other nodes/attributes are rejected rather than silently removed. Inline media nodes are not accepted; use `attach` or `edit-embed` for media. Example `document.json`:
+
+```json
+{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Hello members!","marks":[{"type":"bold"}]}]}]}
+```
+
+Example `poll.json`:
+
+```json
+{"choices":["Tutorial","Behind the scenes"],"multiple":false,"closesAt":null}
+```
+
+New polls require 2–20 distinct nonempty choices. Existing polls accept any subset of `choices`, `multiple`, and `closesAt`. `closesAt` is a future ISO timestamp with timezone, saved at second precision; null removes the end time. Polls with responses permit only an end-time change, and closed polls cannot be edited. `post-details` includes the poll, choices, and response counts.
+
+```sh
+bun patreoncli.ts collections CAMPAIGN_ID --all
+bun patreoncli.ts collection COLLECTION_ID
+bun patreoncli.ts create-collection CAMPAIGN_ID --title "Tutorials" --description "Getting started" --yes
+bun patreoncli.ts edit-collection COLLECTION_ID --posts POST_ID,POST_ID --order custom --yes
+bun patreoncli.ts edit-collection COLLECTION_ID --posts "" --yes
+bun patreoncli.ts delete-collection COLLECTION_ID --yes
+```
+
+`--posts` replaces the collection's post list, so read it first and include IDs to retain. At most 500 unique published posts are accepted; draft IDs are rejected before writing because the site's picker excludes them. `--order` is `new_to_old`, `old_to_new`, or `custom`. Unspecified collection fields stay unchanged. Deleting a collection preserves its posts. No pricing or collection monetization is changed.
+
+English and Polish UI labels are supported where inspected. Other locales may fail with `UI_CHANGED`. These are unofficial website adapters, not an extension of Patreon's public OAuth API. Community requests use the actual same-origin JSON:API routes and page CSRF signature; basic posting uses the editor UI while the content commands above use its inspected API contracts. They only access content available to the signed-in account.
 
 ## TypeScript API
 
 ```ts
-import { Browser, posts, members, draft, community } from "./src/index.ts";
+import { Browser, posts, members, draft, community, content } from "./src/index.ts";
 
 await using browser = await Browser.start("brave", {
   executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
@@ -98,6 +142,8 @@ await using browser = await Browser.start("brave", {
 console.log(await posts(browser, "drafts", 20));
 console.log(await members(browser, 20));
 console.log(await community.chatList(browser, "creator"));
+// content exposes tiers, setAudience, postDetails, editRich, editEmbed, editPoll,
+// collections, collection, createCollection, editCollection and deleteCollection.
 // Explicit write when you intend to save a draft:
 // const saved = await draft(browser, { title: "Weekly update", text: "Hello members!" });
 ```

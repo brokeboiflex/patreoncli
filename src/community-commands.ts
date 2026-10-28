@@ -1,3 +1,4 @@
+import {pagination,listOptions} from "./content-commands.ts";
 import {type Command, str, opt, body, field, textFile, limit} from './command.ts';
 import {ClientError} from './errors.ts';
 import {numericId} from './web-actions.ts';
@@ -9,15 +10,16 @@ const chatOptions=[field('name','chat name'),field('audience','audience',['all_m
 function options(a:Parameters<typeof body>[0]):Partial<community.ChatOptions>{return {name:opt(a,'name'),audience:opt(a,'audience') as community.ChatAudience|undefined,tiers:opt(a,'tiers')?.split(','),emoji:opt(a,'emoji'),published:a.published===undefined?undefined:a.published==='on'};}
 const validId=(a:Parameters<typeof body>[0])=>{community.resourceId(str(a,'id'));};
 export const communityCommands:Command[]=[
- {name:'moderators',help:'list moderator assignments and invitations',execute:community.moderators},
+ {name:'send-attachment',help:'upload and send an image or file to a chat',mutates:true,positionals:[cid,{dest:'file'},text],options:[role,textFile,{...field('type','attachment kind',['image','file']),default:'file'},field('mime','MIME type'),field('reply-to','parent message ID')],validate:a=>{community.channelParts(str(a,'cid'));community.attachmentFile(str(a,'file'),str(a,'type') as 'image'|'file',opt(a,'mime'));if(a.text||a.bodyFile)body(a);if(a.replyTo)community.resourceId(str(a,'replyTo'));},execute:(b,a)=>community.sendAttachment(b,str(a,'cid'),str(a,'file'),{role:asRole(a),kind:str(a,'type') as 'image'|'file',mime:opt(a,'mime'),text:a.text||a.bodyFile?body(a):undefined,replyTo:opt(a,'replyTo')})},
+ {name:'moderators',help:'list moderator assignments and invitations',options:[limit,...pagination],execute:(b,a)=>community.moderators(b,{...listOptions(a),limit:Number(a.limit)})},
  {name:'add-moderator',help:'invite a user to moderate your community',mutates:true,positionals:[id],validate:a=>{numericId(str(a,'id'));},execute:(b,a)=>community.addModerator(b,str(a,'id'))},
  {name:'remove-moderator',help:'remove a moderator assignment or invitation by assignment ID',mutates:true,positionals:[id],validate:a=>{numericId(str(a,'id'));},execute:(b,a)=>community.removeModerator(b,str(a,'id'))},
- {name:'blocks',help:'list blocked users and block IDs',execute:community.blocks},
+ {name:'blocks',help:'list blocked users and block IDs',options:[limit,...pagination],execute:(b,a)=>community.blocks(b,{...listOptions(a),limit:Number(a.limit)})},
  {name:'block',help:'block a user without deleting their comments',mutates:true,positionals:[id],validate:a=>{numericId(str(a,'id'));},execute:(b,a)=>community.block(b,str(a,'id'))},
  {name:'unblock',help:'remove a block by block ID',mutates:true,positionals:[id],validate:a=>{numericId(str(a,'id'));},execute:(b,a)=>community.unblock(b,str(a,'id'))},
- {name:'reports',help:'list reported community chat content',execute:community.reports},
+ {name:'reports',help:'list reported community chat content',options:[limit,...pagination],execute:(b,a)=>community.reports(b,{...listOptions(a),limit:Number(a.limit)})},
  {name:'resolve-report',help:'keep or remove reported chat content',mutates:true,positionals:[id,{dest:'action'}],validate:a=>{validId(a);if(!['keep','remove'].includes(str(a,'action')))throw new ClientError('Action must be keep or remove.','INVALID_ARGUMENT');},execute:(b,a)=>community.resolveReport(b,str(a,'id'),str(a,'action') as 'keep'|'remove')},
- {name:'chat-list',help:'list channels available to the selected identity (up to 30)',options:[role,limit],execute:(b,a)=>community.chatList(b,asRole(a),Number(a.limit))},
+ {name:'chat-list',help:'list channels available to the selected identity',options:[role,limit,{flags:['--offset'],dest:'offset',valueType:'int',default:0},{flags:['--all'],dest:'all',action:'storeTrue'}],validate:a=>{if(!Number.isSafeInteger(a.offset)||Number(a.offset)<0)throw new ClientError('Offset must be nonnegative.','INVALID_ARGUMENT');},execute:(b,a)=>community.chatList(b,asRole(a),Number(a.limit),Number(a.offset),!!a.all)},
  {name:'chat-settings',help:'read a chat audience and tier settings',positionals:[id],validate:validId,execute:(b,a)=>community.chatSettings(b,str(a,'id'))},
  {name:'create-chat',help:'create a chat (unpublished unless --published on)',mutates:true,positionals:[{dest:'campaignId'}],options:chatOptions,validate:a=>{community.chatPayload(str(a,'campaignId'),options(a),true);},execute:(b,a)=>community.createChat(b,str(a,'campaignId'),options(a) as community.ChatOptions)},
  {name:'edit-chat',help:'edit chat name, audience, tiers, emoji or publication',mutates:true,positionals:[id,{dest:'campaignId'}],options:chatOptions,validate:a=>{validId(a);const p=community.chatPayload(str(a,'campaignId'),options(a));if(!Object.keys(p.data.attributes).length&&!a.tiers)throw new ClientError('Provide a setting to edit.','INVALID_ARGUMENT');},execute:(b,a)=>community.editChat(b,str(a,'id'),str(a,'campaignId'),options(a))},

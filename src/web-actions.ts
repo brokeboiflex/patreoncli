@@ -1,3 +1,4 @@
+import { paginate, decodeCursor, type ListOptions } from "./site-api.ts";
 import type { Locator, Response } from "playwright-core";
 import { basename, resolve } from "node:path";
 import { statSync } from "node:fs";
@@ -47,24 +48,18 @@ async function getJSON(b: Browser, target: string): Promise<Document> {
   return result.data;
 }
 
-async function capturedList(b: Browser, pageURL: string, apiPath: string, limit: number): Promise<unknown> {
+async function capturedList(b: Browser, pageURL: string, apiPath: string, limit: number, options: ListOptions = {}): Promise<unknown> {
   countLimit(limit);
-  const pending = b.page.waitForResponse(r => new URL(r.url()).pathname === apiPath && r.request().method() === "GET", { timeout: 30000 }).catch(() => null);
-  await b.goto(pageURL);
-  const response = await pending;
-  if (!response) throw new UiChanged(`No ${apiPath} data arrived. The account may lack access to this page.`);
-  let doc = await jsonResponse(response);
-  const items: Resource[] = [], included = new Map<string, Resource>(), seen = new Set<string>();
-  let next: string | null = null;
-  while (true) {
-    if (!Array.isArray(doc.data)) throw new UiChanged("Expected a list from Patreon.");
-    items.push(...doc.data);
-    for (const item of doc.included ?? []) included.set(`${item.type}:${item.id}`, item);
-    next = typeof doc.links?.next === "string" ? siteURL(doc.links.next) : null;
-    if (items.length >= limit || !next || seen.has(next)) break;
-    seen.add(next); doc = await getJSON(b,next);
+  if (options.cursor) {
+    const resume=decodeCursor(options.cursor,apiPath);
+    await b.goto("/messages?mode=campaign");
+    return paginate(resume.url,limit,options,url=>getJSON(b,url));
   }
-  return { items: items.slice(0,limit), included: [...included.values()], next, truncated: items.length > limit, url: b.page.url() };
+  const pending=b.page.waitForResponse(r=>new URL(r.url()).pathname===apiPath&&r.request().method()==="GET",{timeout:30000}).catch(()=>null);
+  await b.goto(pageURL);
+  const response=await pending;
+  if(!response)throw new UiChanged(`No ${apiPath} data arrived. The account may lack access to this page.`);
+  return {...await paginate(response.url(),limit,options,url=>getJSON(b,url),await jsonResponse(response)),url:b.page.url()};
 }
 
 export async function whoami(b: Browser): Promise<unknown> {
@@ -74,11 +69,11 @@ export async function whoami(b: Browser): Promise<unknown> {
   const url = siteURL((await own.first().getAttribute("href"))!);
   return { creator: new URL(url).pathname.split("/")[2], url };
 }
-export async function posts(b: Browser, status: "published" | "drafts" = "published", limit = 20): Promise<unknown> {
-  return capturedList(b,`/posts/${status}`,"/api/posts",limit);
+export async function posts(b: Browser, status: "published" | "drafts" = "published", limit = 20, options: ListOptions = {}): Promise<unknown> {
+  return capturedList(b,`/posts/${status}`,"/api/posts",limit,options);
 }
-export async function members(b: Browser, limit = 20): Promise<unknown> {
-  return capturedList(b,"/members","/api/members",limit);
+export async function members(b: Browser, limit = 20, options: ListOptions = {}): Promise<unknown> {
+  return capturedList(b,"/members","/api/members",limit,options);
 }
 
 const postFields = "title,content,content_json_string,published_at,scheduled_for,url,post_type,comments_write_access_level,new_post_email_type,min_cents_pledged_to_view,post_metadata";
@@ -96,8 +91,8 @@ export async function read(b: Browser, target: string): Promise<Resource> {
   return postState(b,postId(target));
 }
 
-export async function comments(b: Browser, target: string, limit = 20): Promise<unknown> {
-  return capturedList(b,postURL(target),`/api/posts/${postId(target)}/conversations`,limit);
+export async function comments(b: Browser, target: string, limit = 20, options: ListOptions = {}): Promise<unknown> {
+  return capturedList(b,postURL(target),`/api/posts/${postId(target)}/conversations`,limit,options);
 }
 
 async function editor(b: Browser, target?: string): Promise<string> {

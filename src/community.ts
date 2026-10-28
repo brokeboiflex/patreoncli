@@ -1,33 +1,12 @@
-import { StreamChat } from "stream-chat";
+import {createReadStream, statSync} from "node:fs";
+import {basename} from "node:path";
+import { StreamChat, type Channel } from "stream-chat";
 import type { Browser } from "./browser.ts";
 import { ClientError, UiChanged, WriteUncertain } from "./errors.ts";
 import { numericId } from "./web-actions.ts";
 import { countLimit } from "./ui.ts";
 
-/** Website JSON:API contracts inspected in Patreon's moderation and messaging bundles.
- * This uses the signed-in website session, not the public OAuth API. */
-async function request(b: Browser, path: string, method = "GET", body?: unknown): Promise<any> {
-  if (!path.startsWith("/api/") || path.startsWith("//")) throw new ClientError("Invalid API path.","INVALID_TARGET");
-  const result = await b.page.evaluate(async ({path,method,body}) => {
-    const headers:Record<string,string> = {Accept:"application/vnd.api+json"};
-    if(method!=="GET") {
-      const csrf=document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content;
-      if(!csrf)return {status:0,data:null};
-      headers["X-CSRF-Signature"]=csrf;
-      headers["Content-Type"]="application/vnd.api+json";
-    }
-    try {
-      const r=await fetch(path,{method,headers,credentials:"same-origin",...(body===undefined?{}:{body:JSON.stringify(body)})});
-      return {status:r.status,data:r.status===204?null:await r.json().catch(()=>null)};
-    } catch {return {status:-1,data:null};}
-  },{path,method,body});
-  if(result.status===0)throw new UiChanged("Patreon did not provide a CSRF token. Renew the session.");
-  if(result.status===-1)throw new WriteUncertain("Patreon request was interrupted. Inspect the resource before retrying.");
-  if(result.status>=400 || result.data?.errors?.length)throw new ClientError(`Patreon rejected the request (HTTP ${result.status}). Check account access and resource IDs.`,method==="GET"?"HTTP_ERROR":"WRITE_REJECTED");
-  if(result.status===204 || result.status===202)return result.data ?? {data:null};
-  if(!result.data || !Object.hasOwn(result.data,"data"))throw new UiChanged("Unexpected Patreon API response.");
-  return result.data;
-}
+import { request, listResources, type ListOptions } from "./site-api.ts";
 async function start(b:Browser) { await b.goto("/messages?mode=campaign"); }
 const ref=(type:string,id:string)=>({data:{type,id}});
 const nonempty=(text:string,max=20000)=>{if(!text.trim()||text.length>max)throw new ClientError(`Text must contain 1–${max} characters.`,"INVALID_ARGUMENT");return text;};
@@ -45,13 +24,13 @@ export function chatPayload(campaignId:string,options:Partial<ChatOptions>,creat
   if(create && (!options.name || !options.audience))throw new ClientError("Name and audience are required.","INVALID_ARGUMENT");
   return {data:{type:"stream-channel",relationships:{campaign:ref("campaign",campaignId),...(options.tiers?{rewards:{data:options.tiers.map(id=>({type:"reward",id}))}}:{})},attributes:{...(create?{channel_type:"community_chat_lounge",has_live_audio:false,published:options.published??false}:{}),...(options.name!==undefined?{name:options.name}:{}),...(options.audience?{audience_type:options.audience}:{}),...(options.emoji!==undefined?{emoji:options.emoji}:{}),...(options.published!==undefined?{published:options.published}:{})}}};
 }
-export async function moderators(b:Browser) {await start(b);return request(b,"/api/community_moderator?include=campaign,user");}
+export async function moderators(b:Browser,options?:ListOptions & {limit?:number}) {await start(b);return options?listResources(b,"/api/community_moderator?include=campaign,user",options.limit??20,options):request(b,"/api/community_moderator?include=campaign,user");}
 export async function addModerator(b:Browser,userId:string) {numericId(userId);await start(b);return request(b,"/api/community_moderator","POST",{data:{type:"community_moderator",relationships:{user:ref("user",userId)}}});}
 export async function removeModerator(b:Browser,moderatorId:string) {numericId(moderatorId);await start(b);await request(b,`/api/community_moderator/${moderatorId}`,"DELETE");return {status:"removed",id:moderatorId};}
-export async function blocks(b:Browser) {await start(b);return request(b,"/api/blocks?include=blocked&fields[block]=block_reason&fields[user]=full_name,vanity");}
+export async function blocks(b:Browser,options?:ListOptions & {limit?:number}) {await start(b);return options?listResources(b,"/api/blocks?include=blocked&fields[block]=block_reason&fields[user]=full_name,vanity",options.limit??20,options):request(b,"/api/blocks?include=blocked&fields[block]=block_reason&fields[user]=full_name,vanity");}
 export async function block(b:Browser,userId:string) {numericId(userId);await start(b);return request(b,"/api/blocks","POST",{data:{type:"block",attributes:{},relationships:{blocked:ref("user",userId)}}});}
 export async function unblock(b:Browser,blockId:string) {numericId(blockId);await start(b);await request(b,`/api/blocks/${blockId}`,"DELETE");return {status:"removed",id:blockId};}
-export async function reports(b:Browser) {await start(b);return request(b,"/api/chat/report-meta?include=first_report.reporter,first_report.infractor,first_report.channel,first_report.reason,first_report.media&fields[streamReportMeta]=message_text");}
+export async function reports(b:Browser,options?:ListOptions & {limit?:number}) {await start(b);return options?listResources(b,"/api/chat/report-meta?include=first_report.reporter,first_report.infractor,first_report.channel,first_report.reason,first_report.media&fields[streamReportMeta]=message_text",options.limit??20,options):request(b,"/api/chat/report-meta?include=first_report.reporter,first_report.infractor,first_report.channel,first_report.reason,first_report.media&fields[streamReportMeta]=message_text");}
 export async function resolveReport(b:Browser,reportId:string,action:"keep"|"remove") {
   resourceId(reportId);if(!["keep","remove"].includes(action))throw new ClientError("Action must be keep or remove.","INVALID_ARGUMENT");await start(b);
   const status=action==="keep"?"kept":"removed";
@@ -91,9 +70,16 @@ async function withChat<T>(b:Browser,role:ChatRole,action:(client:StreamChat)=>P
   catch(error){if(error instanceof ClientError)throw error;throw new ClientError("Chat request failed. Check the channel, permissions, and whether your creator page is launched. Writes may need inspection before retrying.","CHAT_REQUEST_FAILED");}
   finally{await client.disconnectUser().catch(()=>{});}
 }
-export async function chatList(b:Browser,role:ChatRole="creator",limit=20) {
-  countLimit(limit);
-  return withChat(b,role,async c=>{const channels=await c.queryChannels({members:{$in:[c.userID!]}},[{last_message_at:-1}],{limit:Math.min(limit,30),watch:false,state:true});return {identity:c.userID,items:channels.map(ch=>({cid:ch.cid,name:(ch.data as Record<string,unknown>)?.name,memberCount:ch.data?.member_count,messages:ch.state.messages.slice(-1)})),limit:Math.min(limit,30)};});
+export async function chatList(b:Browser,role:ChatRole="creator",limit=20,offset=0,all=false) {
+  countLimit(limit);if(!Number.isSafeInteger(offset)||offset<0)throw new ClientError("Offset must be nonnegative.","INVALID_ARGUMENT");
+  return withChat(b,role,async c=>{
+    const items:unknown[]=[];
+    while(true){const size=all?30:Math.min(limit-items.length,30),channels=await c.queryChannels({members:{$in:[c.userID!]}},[{last_message_at:-1},{cid:1}],{limit:size,offset,watch:false,state:true});
+      items.push(...channels.map(ch=>({cid:ch.cid,name:(ch.data as Record<string,unknown>)?.name,memberCount:ch.data?.member_count,messages:ch.state.messages.slice(-1)})));offset+=channels.length;
+      if(channels.length<size)return {identity:c.userID,items,nextOffset:null};
+      if(!all&&items.length>=limit)return {identity:c.userID,items,nextOffset:offset};
+    }
+  });
 }
 export async function chatMessages(b:Browser,cid:string,role:ChatRole="creator",limit=20,before?:string) {
   const [type,id]=channelParts(cid);countLimit(limit);if(before)resourceId(before);
@@ -118,4 +104,29 @@ export async function chatMembers(b:Browser,cid:string,role:ChatRole="creator",l
 export async function react(b:Browser,cid:string,messageId:string,reaction:string,remove=false,role:ChatRole="creator") {
   const [type,id]=channelParts(cid);resourceId(messageId);if(!/^emoji-[a-f0-9]+(?:-[a-f0-9]+)*$/i.test(reaction))throw new ClientError("Use a Patreon emoji reaction ID, for example emoji-1f44d.","INVALID_ARGUMENT");
   return withChat(b,role,c=>remove?c.channel(type,id).deleteReaction(messageId,reaction):c.channel(type,id).sendReaction(messageId,{type:reaction}));
+}
+
+export function attachmentFile(path:string,kind:"image"|"file"="file",mime?:string){
+  const file=statSync(path);if(!file.isFile()||file.size===0)throw new ClientError("Use a nonempty local file.","INVALID_ARGUMENT");
+  if(!["image","file"].includes(kind))throw new ClientError("Attachment kind must be image or file.","INVALID_ARGUMENT");
+  const type=(mime??(Bun.file(path).type||"application/octet-stream")).split(";",1)[0]!.trim();
+  if(!/^[\w.+-]+\/[\w.+-]+$/.test(type)||kind==='image'&&!type.startsWith('image/'))throw new ClientError("Invalid MIME type for attachment.","INVALID_ARGUMENT");
+  return {name:basename(path),bytes:file.size,mime:type};
+}
+export async function sendAttachment(b:Browser,cid:string,path:string,options:{kind?:"image"|"file";mime?:string;text?:string;replyTo?:string;role?:ChatRole}={}){
+  const [type,id]=channelParts(cid),kind=options.kind??'file',file=attachmentFile(path,kind,options.mime);
+  if(options.replyTo)resourceId(options.replyTo);
+  if(options.text!==undefined)nonempty(options.text);
+  return withChat(b,options.role??'creator',client=>uploadMessage(client.channel(type,id),path,kind,file,options));
+}
+
+/** Upload completes before the single send; interruption never triggers a duplicate retry. */
+export async function uploadMessage(channel:Pick<Channel,'sendFile'|'sendImage'|'sendMessage'>,path:string,kind:'file'|'image',file:ReturnType<typeof attachmentFile>,options:{text?:string;replyTo?:string}){
+    const stream=createReadStream(path);
+    let upload:{file:string};
+    try{upload=await(kind==='image'?channel.sendImage(stream,file.name,file.mime):channel.sendFile(stream,file.name,file.mime));}finally{stream.destroy();}
+    if(!upload.file)throw new UiChanged('Chat upload did not return a file URL.');
+    const attachment={type:kind,title:file.name,mime_type:file.mime,file_size:file.bytes,...(kind==='image'?{image_url:upload.file}:{asset_url:upload.file})};
+    try{return await channel.sendMessage({text:options.text??'',attachments:[attachment],...(options.replyTo?{parent_id:options.replyTo}:{})});}
+    catch{throw new WriteUncertain('Chat file uploaded, but message delivery was not confirmed. Inspect the channel before retrying.');}
 }
