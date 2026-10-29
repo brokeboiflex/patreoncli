@@ -32,9 +32,33 @@ test('report keep and removal wait for matching persisted status',async()=>{
  expect(calls[0].body).toEqual({data:{type:'stream-message-report',attributes:{status:'removed'}}});
 });
 test('lounge lifecycle uses the website routes and preserves unspecified settings',async()=>{
- const {b,calls}=client();await createChat(b,'12',{name:'Example',audience:'all_members'});await editChat(b,'abc','12',{name:'Renamed'});await deleteChat(b,'abc');
- expect(calls.map(c=>[c.path,c.method])).toEqual([['/api/chat/lounge','POST'],['/api/chat/lounge/abc','PATCH'],['/api/chat/lounge/abc','DELETE']]);
- expect(calls[1].body.data.attributes).toEqual({name:'Renamed'});
+ const {b,calls}=client([{status:200,data:{data:{type:'campaign',id:'12',attributes:{is_nsfw:false}}}}]);await createChat(b,'12',{name:'Example',audience:'all_members'});await editChat(b,'abc','12',{name:'Renamed'});await deleteChat(b,'abc');
+ expect(calls.map(c=>[c.path,c.method])).toEqual([['/api/campaigns/12?fields[campaign]=is_nsfw&json-api-use-default-includes=false','GET'],['/api/chat/lounge','POST'],['/api/chat/lounge/abc','PATCH'],['/api/chat/lounge/abc','DELETE']]);
+ expect(calls[2].body.data.attributes).toEqual({name:'Renamed'});
+});
+test('Adult-content chat creation requires the website verified status, even after launch approval',async()=>{
+ // Current NewChannelDropdown checks ageVerificationStatus === "verified".
+ // Live account data returned null; the website enum also includes these states.
+ for(const status of [null,'unverified','pending','expired','under_age']) {
+  const {b,calls}=client([
+   {status:200,data:{data:{type:'campaign',id:'12',attributes:{is_nsfw:true}}}},
+   {status:200,data:{data:{type:'user',id:'34',attributes:{age_verification_status:status}}}}
+  ]);
+  await expect(createChat(b,'12',{name:'Example',audience:'all_members'})).rejects.toMatchObject({code:'ID_VERIFICATION_REQUIRED'});
+  expect(calls.every(c=>c.method==='GET')).toBe(true);
+ }
+});
+test('verified Adult-content accounts can submit chat creation and missing verification fields are not misclassified',async()=>{
+ for(const attributes of [{age_verification_status:'verified'},{}]) {
+  const {b,calls}=client([
+   {status:200,data:{data:{type:'campaign',id:'12',attributes:{is_nsfw:true}}}},
+   {status:200,data:{data:{type:'user',id:'34',attributes}}}
+  ]);
+  await createChat(b,'12',{name:'Example',audience:'all_members'});
+  expect(calls[1].path).toBe('/api/current_user?fields[user]=age_verification_status&json-api-use-default-includes=false');
+  expect(calls[2]).toMatchObject({path:'/api/chat/lounge',method:'POST'});
+  expect(calls.filter(c=>c.method==='POST')).toHaveLength(1);
+ }
 });
 test('DM creates one explicit recipient conversation then submits its content',async()=>{
  const {b,calls}=client();await sendDM(b,'12','34','Good work!');

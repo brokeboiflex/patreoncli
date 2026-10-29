@@ -38,7 +38,19 @@ export async function resolveReport(b:Browser,reportId:string,action:"keep"|"rem
   for(let i=0;i<15;i++){const doc=await request(b,`/api/stream-chat/message-report/${reportId}`);if(doc.data?.attributes?.status===status)return {status,id:reportId};await b.page.waitForTimeout(500);}
   throw new WriteUncertain("Report resolution was accepted but readback did not finish. Inspect reports before retrying.");
 }
-export async function createChat(b:Browser,campaignId:string,options:ChatOptions) {const body=chatPayload(campaignId,options,true);await start(b);return request(b,"/api/chat/lounge","POST",body);}
+export async function createChat(b:Browser,campaignId:string,options:ChatOptions) {
+  const body=chatPayload(campaignId,options,true);await start(b);
+  // Match the website's Adult-content chat gate; launch approval alone is insufficient.
+  const campaign=await request(b,`/api/campaigns/${campaignId}?fields[campaign]=is_nsfw&json-api-use-default-includes=false`);
+  if(campaign.data?.attributes?.is_nsfw===true) {
+    const user=await request(b,"/api/current_user?fields[user]=age_verification_status&json-api-use-default-includes=false");
+    const attributes=user.data?.attributes;
+    if(attributes&&Object.hasOwn(attributes,"age_verification_status")&&attributes.age_verification_status!=="verified") {
+      throw new ClientError("Patreon requires completed age/ID verification before this creator account can create chats. Complete verification in Patreon, then retry.","ID_VERIFICATION_REQUIRED");
+    }
+  }
+  return request(b,"/api/chat/lounge","POST",body);
+}
 export async function editChat(b:Browser,channelId:string,campaignId:string,options:Partial<ChatOptions>) {resourceId(channelId);const body=chatPayload(campaignId,options);if(!Object.keys(body.data.attributes).length&&!options.tiers)throw new ClientError("Provide a chat setting to edit.","INVALID_ARGUMENT");await start(b);return request(b,`/api/chat/lounge/${channelId}`,"PATCH",body);}
 export async function deleteChat(b:Browser,channelId:string) {resourceId(channelId);await start(b);await request(b,`/api/chat/lounge/${channelId}`,"DELETE");return {status:"deleted",id:channelId};}
 export async function chatSettings(b:Browser,channelId:string) {resourceId(channelId);await start(b);return request(b,`/api/chat/lounge/${channelId}?include=rewards`);}

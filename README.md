@@ -62,6 +62,8 @@ Comments support listing, new comments/replies, editing, and deletion where the 
 
 Chat commands use the same Stream Chat service as Patreon's website, through its official JavaScript SDK. Tokens are obtained from your signed-in Patreon session, used in memory, and never printed or saved. `chat-list` returns your chat identity and channel `cid` values. Creator identities have the form `campaign-CAMPAIGN_ID`; use that campaign ID for chat creation and DMs.
 
+Adult-content creators also need completed Patreon age/ID verification to create chats, even after their page is approved and published. `create-chat` checks the website's verification state and returns `ID_VERIFICATION_REQUIRED` before submitting a chat when verification is incomplete. Complete that step in Patreon, then retry.
+
 ```sh
 bun patreoncli.ts chat-list
 bun patreoncli.ts chat-list --as member
